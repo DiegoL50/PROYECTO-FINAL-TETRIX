@@ -1,1 +1,208 @@
+def draw_grid(background):
+    """
+    Dibuja la cuadrícula de fondo.
+    """
+    grid_color = 50, 50, 50  # Color de la cuadrícula.
+    # Líneas verticales.
+    for i in range(11):
+        x = TILE_SIZE * i
+        pygame.draw.line(
+            background, grid_color, (x, 0), (x, GRID_HEIGHT)
+        )
+    # Líneas horizontales.
+    for i in range(21):
+        y = TILE_SIZE * i
+        pygame.draw.line(
+            background, grid_color, (0, y), (GRID_WIDTH, y)
+        )
+
+
+def draw_centered_surface(screen, surface, y):
+    """
+    Dibuja una superficie centrada en la pantalla en la coordenada y especificada.
+    """
+    screen.blit(surface, (400 - surface.get_width() / 2, y))
+
+
+def blitlines(surf, text, renderer, color, x, y):
+    h = renderer.get_height()
+    lines = text.split('\n')
+    for i, ll in enumerate(lines):
+        txt_surface = renderer.render(ll, True, color)
+        surf.blit(txt_surface, (x, y + (i * h)))
+
+
+def main():
+    pygame.init()
+    pygame.display.set_caption("Tetris con PyGame")
+    # Inicializa la pantalla en modo completo.
+    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    run = True
+    paused = False
+    game_over = False
+    pantalla_completa = True
+
+    # Crea el fondo.
+    background = pygame.Surface(screen.get_size())
+    bgcolor = (0, 0, 0)  # Color de fondo.
+    background.fill(bgcolor)
+    # Dibuja la cuadrícula sobre el fondo.
+    draw_grid(background)
+    # Hace que el blit sea más rápido.
+    background = background.convert()
+
+    try:
+        font = pygame.font.Font("Tetris.ttf", 16)
+    except OSError:
+        # Si el archivo de fuente no está disponible, se usará la predeterminada.
+        font = pygame.font.Font(None, 16)
+    # Textos para la interfaz del usuario.
+    next_block_text = font.render(
+        "Siguiente figura:", True, (255, 255, 255), bgcolor)
+    score_msg_text = font.render(
+        "Puntaje Actual:", True, (255, 255, 255), bgcolor)
+    score_t_msg_text = font.render(
+        "Puntaje Total:", True, (255, 255, 255), bgcolor)
+    game_paused_text = font.render(
+        "Juego en pausa ...", True, (255, 220, 0), bgcolor)
+
+
+    # Constantes de eventos.
+    MOVEMENT_KEYS = pygame.K_LEFT, pygame.K_RIGHT, pygame.K_DOWN
+    EVENT_UPDATE_CURRENT_BLOCK = pygame.USEREVENT + 1
+    EVENT_MOVE_CURRENT_BLOCK = pygame.USEREVENT + 2
+    pygame.time.set_timer(EVENT_UPDATE_CURRENT_BLOCK, 500)  # Cambia el intervalo para ralentizar la caída
+    pygame.time.set_timer(EVENT_MOVE_CURRENT_BLOCK, 150)  # Cambia el intervalo para ralentizar el movimiento lateral
+
+    blocks = BlocksGroup()  # Inicializa el grupo de bloques.
+
+    key_guide_text = ("Controles\n\n" +
+                      "Q:  Salir\n" +
+                      "R:  Reiniciar\n" +
+                      "U:  Pausa\n" +
+                      "Left:  Izquierda\n" +
+                      "Right:  Derecha\n" +
+                      "Down:  Abajo\n" +
+                      "Up:  Rotar")
+
+    pygame.mixer.init()
+    pygame.mixer.music.load('TetrisMusic.mp3')  
+    pygame.mixer.music.play(-1)
+
+    max_attempts = 3
+    current_attempts = 0
+    while run:
+        for event in pygame.event.get():
+            if game_over and run:
+                current_attempts += 1
+                if current_attempts < max_attempts:
+                    try:
+                        font = pygame.font.Font("Tetris.ttf", 40)
+                    except OSError:
+                        # Si el archivo de fuente no está disponible, se usará la predeterminada.
+                        font = pygame.font.Font(None, 40)
+                    game_lives = font.render(
+                        "Aún puedes ganar !", True, (255, 220, 0), bgcolor)
+                    text_rect = game_lives.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
+                    screen.blit(game_lives, text_rect)
+                    pygame.display.flip()
+
+                    # Espera un momento antes de continuar
+                    pygame.time.wait(3000)
+                    game_over = False  # Reinicia el estado del juego para continuar
+
+                    # Reinicia el juego
+                    blocks = BlocksGroup()
+                else:
+                    game_over = True
+                    run = False
+                    break
+
+            if event.type == pygame.QUIT:
+                game_over = True
+                run = False
+                break
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_q:
+                    game_over = True
+                    run = False
+                    break
+
+                elif event.key == pygame.K_UP and not paused and not game_over:
+                    blocks.rotate_current_block()
+                elif not game_over:
+                    if event.key in MOVEMENT_KEYS:
+                        if paused:
+                            blocks.stop_moving_current_block()
+                        else:
+                            blocks.start_moving_current_block(event.key)
+
+                    if event.key == pygame.K_m:
+                        pantalla_completa = not pantalla_completa
+                        flags = pygame.FULLSCREEN if pantalla_completa else 0
+                        screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), flags, 32)
+
+                    if event.key == pygame.K_r:
+                        main()
+
+                    if event.key == pygame.K_u:
+                        paused = not paused  # Cambia el estado de pausa
+
+            elif event.type == pygame.KEYUP:
+                if event.key in MOVEMENT_KEYS:
+                    blocks.stop_moving_current_block()
+
+            try:
+                if not paused and not game_over:
+                    if event.type == EVENT_UPDATE_CURRENT_BLOCK:
+                        blocks.update_current_block()
+                    elif event.type == EVENT_MOVE_CURRENT_BLOCK:
+                        blocks.move_current_block()
+            except TopReached:
+                game_over = True
+
+        font = pygame.font.Font("Tetris.ttf", 16)
+        screen.blit(background, (0, 0))
+        blocks.draw(screen)
+        blitlines(screen, key_guide_text, font, (255, 255, 255), 340, 400)
+
+        draw_centered_surface(screen, next_block_text, 50)
+        draw_centered_surface(screen, blocks.next_block.image, 100)
+        draw_centered_surface(screen, score_msg_text, 240)
+        draw_centered_surface(screen, score_t_msg_text, 290)
+
+        score_text = font.render(str(blocks.score), True, (255, 255, 255), bgcolor)
+        draw_centered_surface(screen, score_text, 260)
+        score_text = font.render(str(blocks.total), True, (255, 255, 255), bgcolor)
+        draw_centered_surface(screen, score_text, 310)
+
+        if paused:
+            draw_centered_surface(screen, game_paused_text, 360)
+
+        pygame.display.flip()
+
+    # Mostrar el mensaje de "Game Over" en la pantalla
+
+    try:
+        font = pygame.font.Font("Tetris.ttf", 40)
+    except OSError:
+        # Si el archivo de fuente no está disponible, se usará la predeterminada.
+        font = pygame.font.Font(None, 40)
+
+    text = font.render("Game Over", True, (255, 220, 0))  # Color blanco
+    text_rect = text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))  # Centrar el texto en la pantalla
+
+    screen.blit(text, text_rect)
+    pygame.display.flip()
+
+    # Esperar un momento antes de salir
+    pygame.time.wait(3000)  # Espera 3 segundos (3000 milisegundos) antes de salir
+
+    pygame.mixer.music.stop()
+    pygame.quit()
+
+
+if __name__ == "__main__":
+    main()
 
