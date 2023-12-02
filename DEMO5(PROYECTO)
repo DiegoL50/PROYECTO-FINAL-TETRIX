@@ -1,1 +1,738 @@
+from collections import OrderedDict
+import random
+
+from pygame import Rect
+import pygame
+import numpy as np
+
+# Dimensiones de la ventana y la grilla del juego.
+WINDOW_WIDTH, WINDOW_HEIGHT = 500, 601
+GRID_WIDTH, GRID_HEIGHT = 300, 600
+TILE_SIZE = 30
+
+
+def remove_empty_columns(arr, _x_offset=0, _keep_counting=True):
+    """
+    Elimina columnas vacías de un arreglo (es decir, columnas llenas de ceros).
+    Devuelve una tupla (new_arr, x_offset), donde x_offset es cuánto se necesita
+    aumentar la coordenada x para mantener la posición original del bloque.
+    """
+    for colid, col in enumerate(arr.T):
+        if col.max() == 0:
+            if _keep_counting:
+                _x_offset += 1
+            # Elimina la columna actual y vuelve a intentarlo.
+            arr, _x_offset = remove_empty_columns(
+                np.delete(arr, colid, 1), _x_offset, _keep_counting)
+            break
+        else:
+            _keep_counting = False
+    return arr, _x_offset
+
+
+class BottomReached(Exception):
+    pass
+
+
+class TopReached(Exception):
+    pass
+
+
+class Block(pygame.sprite.Sprite):
+    """
+    Clase Block que representa cada bloque en el juego.
+    Hereda de pygame.sprite.Sprite.
+    """
+
+    @staticmethod
+    def collide(block, group):
+        """
+        Verifica si el bloque especificado colisiona con algún otro bloque
+        en el grupo.
+        """
+        for other_block in group:
+            # Ignora el bloque actual que siempre colisionará consigo mismo.
+            if block == other_block:
+                continue
+            if pygame.sprite.collide_mask(block, other_block) is not None:
+                return True
+        return False
+
+    def __init__(self):
+        """
+        Inicializa un nuevo bloque.
+        El bloque tiene un color aleatorio y una estructura basada en la rotación y el reflejo.
+        """
+        super().__init__()
+        # Obtener un color aleatorio.
+        self.color = random.choice((
+            (200, 200, 200),  # Gris
+            (255, 0, 60),  # Rojo
+            (53, 0, 255),  # Azul
+            (118, 255, 36),  # Verde
+            (219, 36, 255),  # Púrpura
+            (255, 254, 36),  # Amarillo
+            (255, 162, 36),  # Naranja
+            (0, 238, 255),  # Celeste
+        ))
+        self.current = True
+        self.struct = np.array(self.struct)
+        # Rotación y reflejo aleatorios iniciales.
+        if random.randint(0, 1):
+            self.struct = np.rot90(self.struct)
+        if random.randint(0, 1):
+            self.struct = np.flip(self.struct, 0)
+        self._draw()
+
+    def _draw(self, x=4, y=0):
+        """
+        Dibuja el bloque en la pantalla.
+        """
+        width = len(self.struct[0]) * TILE_SIZE
+        height = len(self.struct) * TILE_SIZE
+        self.image = pygame.surface.Surface([width, height])
+        self.image.set_colorkey((0, 0, 0))
+        # Posición y tamaño
+        self.rect = Rect(0, 0, width, height)
+        self.x = x
+        self.y = y
+        for y, row in enumerate(self.struct):
+            for x, col in enumerate(row):
+                if col:
+                    pygame.draw.rect(
+                        self.image,
+                        self.color,
+                        Rect(x * TILE_SIZE + 1, y * TILE_SIZE + 1,
+                             TILE_SIZE - 2, TILE_SIZE - 2)
+                    )
+        self._create_mask()
+
+    def redraw(self):
+        """
+        Redibuja el bloque. Útil para actualizar su posición en la pantalla.
+        """
+        self._draw(self.x, self.y)
+
+    def _create_mask(self):
+        """
+        Crea un 'mask' del bloque, necesario para la detección de colisiones.
+        Debe llamarse después de crear o actualizar la superficie del bloque.
+        """
+        self.mask = pygame.mask.from_surface(self.image)
+
+    def initial_draw(self):
+        raise NotImplementedError
+
+    @property
+    def group(self):
+        """
+        Devuelve el grupo al que pertenece este bloque.
+        """
+        return self.groups()[0]
+
+    @property
+    def x(self):
+        """
+        Propiedad x para obtener la posición en el eje X del bloque.
+        """
+        return self._x
+
+    @x.setter
+    def x(self, value):
+        """
+        Setter para la posición X del bloque. Actualiza la posición del rectángulo.
+        """
+        self._x = value
+        self.rect.left = value * TILE_SIZE
+
+    @property
+    def y(self):
+        """
+        Propiedad y para obtener la posición en el eje Y del bloque.
+        """
+        return self._y
+
+    @y.setter
+    def y(self, value):
+        """
+        Setter para la posición Y del bloque. Actualiza la posición del rectángulo.
+        """
+        self._y = value
+        self.rect.top = value * TILE_SIZE
+
+    def move_left(self, group):
+        """
+        Mueve el bloque hacia la izquierda. Verifica colisiones y límites del área de juego.
+        """
+        self.x -= 1
+        # Verificar si se alcanzó el margen izquierdo o si hay colisión.
+        if self.x < 0 or Block.collide(self, group):
+            self.x += 1
+
+    def move_right(self, group):
+        """
+        Mueve el bloque hacia la derecha. Verifica colisiones y límites del área de juego.
+        """
+        self.x += 1
+        # Verificar si se alcanzó el margen derecho o si hay colisión.
+        if self.rect.right > GRID_WIDTH or Block.collide(self, group):
+            self.x -= 1
+
+    def move_down(self, group):
+        """
+        Mueve el bloque hacia abajo. Verifica colisiones y límites del área de juego.
+        Si se alcanza el fondo o se colisiona con otro bloque, se lanza BottomReached.
+        """
+        self.y += 1
+        if self.rect.bottom > GRID_HEIGHT or Block.collide(self, group):
+            self.y -= 1
+            self.current = False
+            raise BottomReached
+
+    def rotate(self, group):
+        """
+        Rota el bloque. Verifica colisiones y ajusta la posición si es necesario.
+        """
+        self.image = pygame.transform.rotate(self.image, 90)
+        self.rect.width = self.image.get_width()
+        self.rect.height = self.image.get_height()
+        self._create_mask()
+        # Ajustar la posición del bloque si excede los límites o colisiona.
+        while self.rect.right > GRID_WIDTH:
+            self.x -= 1
+        while self.rect.left < 0:
+            self.x += 1
+        while self.rect.bottom > GRID_HEIGHT:
+            self.y -= 1
+        while True:
+            if not Block.collide(self, group):
+                break
+            self.y -= 1
+        self.struct = np.rot90(self.struct)
+
+    def update(self):
+        """
+        Actualiza el estado del bloque. Por defecto, lo mueve hacia abajo si está activo.
+        """
+        if self.current:
+            self.move_down()
+
+
+class SquareBlock(Block):
+    """
+    Define un bloque cuadrado en el juego. Hereda de la clase Block.
+    La estructura del bloque es un cuadrado 2x2.
+    """
+    struct = (
+        (1, 1),
+        (1, 1)
+    )
+
+
+class TBlock(Block):
+    """
+    Define un bloque en forma de 'T' en el juego. Hereda de la clase Block.
+    La estructura del bloque se asemeja a la letra T.
+    """
+    struct = (
+        (1, 1, 1),
+        (0, 1, 0),
+        (0, 1, 0),
+    )
+
+
+class LineBlock(Block):
+    """
+    Define un bloque en forma de línea en el juego. Hereda de la clase Block.
+    La estructura del bloque es una línea vertical de 1x4.
+    """
+    struct = (
+        (1,),
+        (1,),
+        (1,),
+        (1,)
+    )
+
+
+class LBlock(Block):
+    """
+    Define un bloque en forma de 'L' en el juego. Hereda de la clase Block.
+    La estructura del bloque se asemeja a la letra L.
+    """
+    struct = (
+        (1, 1),
+        (1, 0),
+        (1, 0),
+    )
+
+
+class ZBlock(Block):
+    """
+    Define un bloque en forma de 'Z' en el juego. Hereda de la clase Block.
+    La estructura del bloque se asemeja a la letra Z.
+    """
+    struct = (
+        (0, 1),
+        (1, 1),
+        (1, 0),
+    )
+
+
+class PyramidBlock(Block):
+    struct = (
+        (0, 1, 0),
+        (1, 1, 1),
+    )
+
+
+class SmallLBlock(Block):
+    struct = (
+        (1, 1),
+        (1, 0),
+    )
+
+
+class InvPyramidBlock(Block):
+    struct = (
+        (1, 1, 1),
+        (1, 0, 1)
+    )
+
+
+class LwithDotBlock(Block):
+    struct = (
+        (0, 1, 0),
+        (1, 1, 0),
+        (0, 1, 1),
+    )
+
+
+class LineWithDotBlock(Block):
+    struct = (
+        (1, 0),
+        (1, 1),
+        (1, 0),
+        (1, 0),
+    )
+
+
+class StarBlock(Block):
+    struct = (
+        (0, 1, 0),
+        (1, 1, 1),
+        (0, 1, 0),
+    )
+
+
+class LargeZBlock(Block):
+    struct = (
+        (0, 1, 1),
+        (0, 1, 0),
+        (1, 1, 0),
+    )
+
+
+class BlocksGroup(pygame.sprite.OrderedUpdates):
+
+    total = 0
+    """
+    Gestiona un grupo de bloques en el juego. Hereda de pygame.sprite.OrderedUpdates,
+    que es un grupo de sprites que mantiene el orden de los sprites.
+    """
+
+    @staticmethod
+    def get_random_block():
+        """
+        Devuelve un bloque aleatorio de entre los tipos definidos.
+        """
+        return random.choice(
+            (SquareBlock, TBlock, LineBlock, LBlock, ZBlock, PyramidBlock, SmallLBlock, InvPyramidBlock, LwithDotBlock,
+             LineWithDotBlock, StarBlock, LargeZBlock))()
+
+    def __init__(self, *args, **kwargs):
+        """
+        Inicializa el grupo de bloques. Establece el grid, maneja la puntuación,
+        y crea el primer bloque del juego.
+        """
+        super().__init__(self, *args, **kwargs)
+        self._reset_grid()
+        self._ignore_next_stop = False
+        self.score = 0
+        self.next_block = None
+        # No se mueve realmente, solo para inicializar el atributo.
+        self.stop_moving_current_block()
+        # El primer bloque.
+        self._create_new_block()
+
+    def _check_line_completion(self):
+        """
+        Revisa cada línea del grid y elimina aquellas que estén completas.
+        Aumenta la puntuación por cada línea completada.
+        """
+        # Empieza a revisar desde la parte inferior.
+        for i, row in enumerate(self.grid[::-1]):
+            if all(row):
+                self.score += 5
+                BlocksGroup.total += self.score
+                # Obtiene los bloques afectados por la eliminación de la línea y
+                # elimina duplicados.
+                affected_blocks = list(
+                    OrderedDict.fromkeys(self.grid[-1 - i]))
+
+                for block, y_offset in affected_blocks:
+                    # Elimina los tiles del bloque que pertenecen a la
+                    # línea completada.
+                    block.struct = np.delete(block.struct, y_offset, 0)
+                    if block.struct.any():
+                        # Una vez eliminado, verifica si hay columnas vacías
+                        # ya que necesitan ser eliminadas.
+                        block.struct, x_offset = \
+                            remove_empty_columns(block.struct)
+                        # Compensa el espacio eliminado con las columnas para
+                        # mantener la posición original del bloque.
+                        block.x += x_offset
+                        # Fuerza la actualización.
+                        block.redraw()
+                    else:
+                        # Si la estructura está vacía, el bloque desaparece.
+                        self.remove(block)
+
+                # En lugar de verificar qué bloques necesitan moverse
+                # una vez completada una línea, intenta mover todos los
+                # bloques.
+                for block in self:
+                    # Excepto el bloque actual.
+                    if block.current:
+                        continue
+                    # Baja cada bloque hasta que alcance el fondo o colisione
+                    # con otro bloque.
+                    while True:
+                        try:
+                            block.move_down(self)
+                        except BottomReached:
+                            break
+
+                self.update_grid()
+                # Como hemos actualizado el grid, ahora el contador i
+                # ya no es válido, así que llama de nuevo a la función
+                # para verificar si hay otras líneas completadas en el
+                # nuevo grid.
+                self._check_line_completion()
+                break
+
+    def _reset_grid(self):
+        """
+        Reinicia el grid del juego. El grid es una representación 2D de la ubicación
+        de los bloques en el juego.
+        """
+        self.grid = [[0 for _ in range(10)] for _ in range(20)]
+
+    def _create_new_block(self):
+        """
+        Crea un nuevo bloque y lo añade al juego. Si hay una colisión al crear un
+        nuevo bloque, se lanza la excepción TopReached.
+        """
+        new_block = self.next_block or BlocksGroup.get_random_block()
+        if Block.collide(new_block, self):
+            raise TopReached
+        self.add(new_block)
+        self.next_block = BlocksGroup.get_random_block()
+        self.update_grid()
+        self._check_line_completion()
+
+    def update_grid(self):
+        """
+        Actualiza el grid del juego basándose en la posición y la estructura de
+        los bloques actuales.
+        """
+        self._reset_grid()
+        for block in self:
+            for y_offset, row in enumerate(block.struct):
+                for x_offset, digit in enumerate(row):
+                    # Previene reemplazar bloques anteriores.
+                    if digit == 0:
+                        continue
+                    rowid = block.y + y_offset
+                    colid = block.x + x_offset
+                    self.grid[rowid][colid] = (block, y_offset)
+
+    @property
+    def current_block(self):
+        """
+        Devuelve el bloque actual (el último en la lista de sprites).
+        """
+        return self.sprites()[-1]
+
+    def update_current_block(self):
+        """
+        Actualiza la posición del bloque actual, moviéndolo hacia abajo.
+        Si el bloque alcanza el fondo, detiene su movimiento y crea un nuevo bloque.
+        """
+        try:
+            self.current_block.move_down(self)
+        except BottomReached:
+            self.stop_moving_current_block()
+            self._create_new_block()
+        else:
+            self.update_grid()
+
+    def move_current_block(self):
+        """
+        Mueve el bloque actual según la dirección indicada. Si se alcanza el fondo
+        durante el movimiento, se detiene el movimiento y se crea un nuevo bloque.
+        """
+        # Primero verifica si hay algo que mover.
+        if self._current_block_movement_heading is None:
+            return
+        action = {
+            pygame.K_DOWN: self.current_block.move_down,
+            pygame.K_LEFT: self.current_block.move_left,
+            pygame.K_RIGHT: self.current_block.move_right
+        }
+        try:
+            # Cada función requiere el grupo como primer argumento
+            # para verificar posibles colisiones.
+            action[self._current_block_movement_heading](self)
+        except BottomReached:
+            self.stop_moving_current_block()
+            self._create_new_block()
+        else:
+            self.update_grid()
+
+    def start_moving_current_block(self, key):
+        """
+        Inicia el movimiento del bloque actual en la dirección dada por 'key'.
+        Si ya se está moviendo, ignora el próximo comando de detener.
+        """
+        if self._current_block_movement_heading is not None:
+            self._ignore_next_stop = True
+        self._current_block_movement_heading = key
+
+    def stop_moving_current_block(self):
+        """
+        Detiene el movimiento del bloque actual. Si se debe ignorar el próximo
+        comando de detener, simplemente resetea esa bandera.
+        """
+        if self._ignore_next_stop:
+            self._ignore_next_stop = False
+        else:
+            self._current_block_movement_heading = None
+
+    def rotate_current_block(self):
+        """
+        Rota el bloque actual. Previene la rotación de SquareBlocks.
+        Actualiza el grid después de la rotación.
+        """
+        if not isinstance(self.current_block, SquareBlock):
+            self.current_block.rotate(self)
+            self.update_grid()
+
+
+def draw_grid(background):
+    """
+    Dibuja la cuadrícula de fondo.
+    """
+    grid_color = 50, 50, 50  # Color de la cuadrícula.
+    # Líneas verticales.
+    for i in range(11):
+        x = TILE_SIZE * i
+        pygame.draw.line(
+            background, grid_color, (x, 0), (x, GRID_HEIGHT)
+        )
+    # Líneas horizontales.
+    for i in range(21):
+        y = TILE_SIZE * i
+        pygame.draw.line(
+            background, grid_color, (0, y), (GRID_WIDTH, y)
+        )
+
+
+def draw_centered_surface(screen, surface, y):
+    """
+    Dibuja una superficie centrada en la pantalla en la coordenada y especificada.
+    """
+    screen.blit(surface, (400 - surface.get_width() / 2, y))
+
+
+def blitlines(surf, text, renderer, color, x, y):
+    h = renderer.get_height()
+    lines = text.split('\n')
+    for i, ll in enumerate(lines):
+        txt_surface = renderer.render(ll, True, color)
+        surf.blit(txt_surface, (x, y + (i * h)))
+
+
+def main():
+    pygame.init()
+    pygame.display.set_caption("Tetris con PyGame")
+    # Inicializa la pantalla en modo completo.
+    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    run = True
+    paused = False
+    game_over = False
+    pantalla_completa = True
+
+    # Crea el fondo.
+    background = pygame.Surface(screen.get_size())
+    bgcolor = (0, 0, 0)  # Color de fondo.
+    background.fill(bgcolor)
+    # Dibuja la cuadrícula sobre el fondo.
+    draw_grid(background)
+    # Hace que el blit sea más rápido.
+    background = background.convert()
+
+    try:
+        font = pygame.font.Font("Tetris.ttf", 16)
+    except OSError:
+        # Si el archivo de fuente no está disponible, se usará la predeterminada.
+        font = pygame.font.Font(None, 16)
+    # Textos para la interfaz del usuario.
+    next_block_text = font.render(
+        "Siguiente figura:", True, (255, 255, 255), bgcolor)
+    score_msg_text = font.render(
+        "Puntaje Actual:", True, (255, 255, 255), bgcolor)
+    score_t_msg_text = font.render(
+        "Puntaje Total:", True, (255, 255, 255), bgcolor)
+    game_paused_text = font.render(
+        "Juego en pausa ...", True, (255, 220, 0), bgcolor)
+
+
+    # Constantes de eventos.
+    MOVEMENT_KEYS = pygame.K_LEFT, pygame.K_RIGHT, pygame.K_DOWN
+    EVENT_UPDATE_CURRENT_BLOCK = pygame.USEREVENT + 1
+    EVENT_MOVE_CURRENT_BLOCK = pygame.USEREVENT + 2
+    pygame.time.set_timer(EVENT_UPDATE_CURRENT_BLOCK, 500)  # Cambia el intervalo para ralentizar la caída
+    pygame.time.set_timer(EVENT_MOVE_CURRENT_BLOCK, 150)  # Cambia el intervalo para ralentizar el movimiento lateral
+
+    blocks = BlocksGroup()  # Inicializa el grupo de bloques.
+
+    key_guide_text = ("Controles\n\n" +
+                      "Q:  Salir\n" +
+                      "R:  Reiniciar\n" +
+                      "U:  Pausa\n" +
+                      "Left:  Izquierda\n" +
+                      "Right:  Derecha\n" +
+                      "Down:  Abajo\n" +
+                      "Up:  Rotar")
+
+    pygame.mixer.init()
+    pygame.mixer.music.load('TetrisMusic.mp3')  
+    pygame.mixer.music.play(-1)
+
+    max_attempts = 3
+    current_attempts = 0
+    while run:
+        for event in pygame.event.get():
+            if game_over and run:
+                current_attempts += 1
+                if current_attempts < max_attempts:
+                    try:
+                        font = pygame.font.Font("Tetris.ttf", 40)
+                    except OSError:
+                        # Si el archivo de fuente no está disponible, se usará la predeterminada.
+                        font = pygame.font.Font(None, 40)
+                    game_lives = font.render(
+                        "Aún puedes ganar !", True, (255, 220, 0), bgcolor)
+                    text_rect = game_lives.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
+                    screen.blit(game_lives, text_rect)
+                    pygame.display.flip()
+
+                    # Espera un momento antes de continuar
+                    pygame.time.wait(3000)
+                    game_over = False  # Reinicia el estado del juego para continuar
+
+                    # Reinicia el juego
+                    blocks = BlocksGroup()
+                else:
+                    game_over = True
+                    run = False
+                    break
+
+            if event.type == pygame.QUIT:
+                game_over = True
+                run = False
+                break
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_q:
+                    game_over = True
+                    run = False
+                    break
+
+                elif event.key == pygame.K_UP and not paused and not game_over:
+                    blocks.rotate_current_block()
+                elif not game_over:
+                    if event.key in MOVEMENT_KEYS:
+                        if paused:
+                            blocks.stop_moving_current_block()
+                        else:
+                            blocks.start_moving_current_block(event.key)
+
+                    if event.key == pygame.K_m:
+                        pantalla_completa = not pantalla_completa
+                        flags = pygame.FULLSCREEN if pantalla_completa else 0
+                        screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), flags, 32)
+
+                    if event.key == pygame.K_r:
+                        main()
+
+                    if event.key == pygame.K_u:
+                        paused = not paused  # Cambia el estado de pausa
+
+            elif event.type == pygame.KEYUP:
+                if event.key in MOVEMENT_KEYS:
+                    blocks.stop_moving_current_block()
+
+            try:
+                if not paused and not game_over:
+                    if event.type == EVENT_UPDATE_CURRENT_BLOCK:
+                        blocks.update_current_block()
+                    elif event.type == EVENT_MOVE_CURRENT_BLOCK:
+                        blocks.move_current_block()
+            except TopReached:
+                game_over = True
+
+        font = pygame.font.Font("Tetris.ttf", 16)
+        screen.blit(background, (0, 0))
+        blocks.draw(screen)
+        blitlines(screen, key_guide_text, font, (255, 255, 255), 340, 400)
+
+        draw_centered_surface(screen, next_block_text, 50)
+        draw_centered_surface(screen, blocks.next_block.image, 100)
+        draw_centered_surface(screen, score_msg_text, 240)
+        draw_centered_surface(screen, score_t_msg_text, 290)
+
+        score_text = font.render(str(blocks.score), True, (255, 255, 255), bgcolor)
+        draw_centered_surface(screen, score_text, 260)
+        score_text = font.render(str(blocks.total), True, (255, 255, 255), bgcolor)
+        draw_centered_surface(screen, score_text, 310)
+
+        if paused:
+            draw_centered_surface(screen, game_paused_text, 360)
+
+        pygame.display.flip()
+
+    # Mostrar el mensaje de "Game Over" en la pantalla
+
+    try:
+        font = pygame.font.Font("Tetris.ttf", 40)
+    except OSError:
+        # Si el archivo de fuente no está disponible, se usará la predeterminada.
+        font = pygame.font.Font(None, 40)
+
+    text = font.render("Game Over", True, (255, 220, 0))  # Color blanco
+    text_rect = text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))  # Centrar el texto en la pantalla
+
+    screen.blit(text, text_rect)
+    pygame.display.flip()
+
+    # Esperar un momento antes de salir
+    pygame.time.wait(3000)  # Espera 3 segundos (3000 milisegundos) antes de salir
+
+    pygame.mixer.music.stop()
+    pygame.quit()
+
+
+if __name__ == "__main__":
+    main()
 
