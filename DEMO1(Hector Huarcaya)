@@ -1,1 +1,179 @@
+from collections import OrderedDict
+import random
 
+from pygame import Rect
+import pygame
+import numpy as np
+
+# Dimensiones de la ventana y la grilla del juego.
+WINDOW_WIDTH, WINDOW_HEIGHT = 500, 601
+GRID_WIDTH, GRID_HEIGHT = 300, 600
+TILE_SIZE = 30
+
+
+def remove_empty_columns(arr, _x_offset=0, _keep_counting=True):
+    """
+    Elimina columnas vacías de un arreglo (es decir, columnas llenas de ceros).
+    Devuelve una tupla (new_arr, x_offset), donde x_offset es cuánto se necesita
+    aumentar la coordenada x para mantener la posición original del bloque.
+    """
+    for colid, col in enumerate(arr.T):
+        if col.max() == 0:
+            if _keep_counting:
+                _x_offset += 1
+            # Elimina la columna actual y vuelve a intentarlo.
+            arr, _x_offset = remove_empty_columns(
+                np.delete(arr, colid, 1), _x_offset, _keep_counting)
+            break
+        else:
+            _keep_counting = False
+    return arr, _x_offset
+
+
+class BottomReached(Exception):
+    pass
+
+
+class TopReached(Exception):
+    pass
+
+
+class Block(pygame.sprite.Sprite):
+    """
+    Clase Block que representa cada bloque en el juego.
+    Hereda de pygame.sprite.Sprite.
+    """
+
+    @staticmethod
+    def collide(block, group):
+        """
+        Verifica si el bloque especificado colisiona con algún otro bloque
+        en el grupo.
+        """
+        for other_block in group:
+            # Ignora el bloque actual que siempre colisionará consigo mismo.
+            if block == other_block:
+                continue
+            if pygame.sprite.collide_mask(block, other_block) is not None:
+                return True
+        return False
+
+    def __init__(self):
+        """
+        Inicializa un nuevo bloque.
+        El bloque tiene un color aleatorio y una estructura basada en la rotación y el reflejo.
+        """
+        super().__init__()
+        # Obtener un color aleatorio.
+        self.color = random.choice((
+            (200, 200, 200),  # Gris
+            (255, 0, 60),  # Rojo
+            (53, 0, 255),  # Azul
+            (118, 255, 36),  # Verde
+            (219, 36, 255),  # Púrpura
+            (255, 254, 36),  # Amarillo
+            (255, 162, 36),  # Naranja
+            (0, 238, 255),  # Celeste
+        ))
+        self.current = True
+        self.struct = np.array(self.struct)
+        # Rotación y reflejo aleatorios iniciales.
+        if random.randint(0, 1):
+            self.struct = np.rot90(self.struct)
+        if random.randint(0, 1):
+            self.struct = np.flip(self.struct, 0)
+        self._draw()
+
+    def _draw(self, x=4, y=0):
+        """
+        Dibuja el bloque en la pantalla.
+        """
+        width = len(self.struct[0]) * TILE_SIZE
+        height = len(self.struct) * TILE_SIZE
+        self.image = pygame.surface.Surface([width, height])
+        self.image.set_colorkey((0, 0, 0))
+        # Posición y tamaño
+        self.rect = Rect(0, 0, width, height)
+        self.x = x
+        self.y = y
+        for y, row in enumerate(self.struct):
+            for x, col in enumerate(row):
+                if col:
+                    pygame.draw.rect(
+                        self.image,
+                        self.color,
+                        Rect(x * TILE_SIZE + 1, y * TILE_SIZE + 1,
+                             TILE_SIZE - 2, TILE_SIZE - 2)
+                    )
+        self._create_mask()
+
+    def redraw(self):
+        """
+        Redibuja el bloque. Útil para actualizar su posición en la pantalla.
+        """
+        self._draw(self.x, self.y)
+
+    def _create_mask(self):
+        """
+        Crea un 'mask' del bloque, necesario para la detección de colisiones.
+        Debe llamarse después de crear o actualizar la superficie del bloque.
+        """
+        self.mask = pygame.mask.from_surface(self.image)
+
+    def initial_draw(self):
+        raise NotImplementedError
+
+    @property
+    def group(self):
+        """
+        Devuelve el grupo al que pertenece este bloque.
+        """
+        return self.groups()[0]
+
+    @property
+    def x(self):
+        """
+        Propiedad x para obtener la posición en el eje X del bloque.
+        """
+        return self._x
+
+    @x.setter
+    def x(self, value):
+        """
+        Setter para la posición X del bloque. Actualiza la posición del rectángulo.
+        """
+        self._x = value
+        self.rect.left = value * TILE_SIZE
+
+    @property
+    def y(self):
+        """
+        Propiedad y para obtener la posición en el eje Y del bloque.
+        """
+        return self._y
+
+    @y.setter
+    def y(self, value):
+        """
+        Setter para la posición Y del bloque. Actualiza la posición del rectángulo.
+        """
+        self._y = value
+        self.rect.top = value * TILE_SIZE
+
+    def move_left(self, group):
+        """
+        Mueve el bloque hacia la izquierda. Verifica colisiones y límites del área de juego.
+        """
+        self.x -= 1
+        # Verificar si se alcanzó el margen izquierdo o si hay colisión.
+        if self.x < 0 or Block.collide(self, group):
+            self.x += 1
+
+    def move_right(self, group):
+        """
+        Mueve el bloque hacia la derecha. Verifica colisiones y límites del área de juego.
+        """
+        self.x += 1
+        # Verificar si se alcanzó el margen derecho o si hay colisión.
+        if self.rect.right > GRID_WIDTH or Block.collide(self, group):
+            self.x -= 1
